@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: porchbook-calls
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: ALLOWED_ORIGINS
+        value: https://pmmporchbook.grok.me
+      - key: TURN_URLS
+        sync: false
+      - key: TURN_USERNAME
+        sync: false
+      - key: TURN_CREDENTIAL
+        sync: false
