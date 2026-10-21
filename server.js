@@ -41,6 +41,13 @@ const originOk = (origin) =>
   /^https?:\/\/localhost(:\d+)?$/.test(origin) || /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(origin);
 
 const server = http.createServer((req, res) => {
+  if (req.method === "POST" && req.url.startsWith("/relay")) {
+    handleRelay(req, res).catch(() => {
+      if (!res.headersSent) res.writeHead(500);
+      res.end();
+    });
+    return;
+  }
   if (req.url.startsWith("/porchbook-calls.js")) {
     fs.readFile(WIDGET_PATH, (err, data) => {
       if (err) { res.writeHead(500); return res.end("widget missing"); }
@@ -88,19 +95,11 @@ function describe(req) {
   return `${device} | ${browser} | ${net} | ${origin}`;
 }
 
-wss.on("connection", (ws, req) => {
-  ws.isAlive = true;
-  ws.about = describe(req);
-  ws.on("pong", () => (ws.isAlive = true));
-
-  ws.on("message", (raw) => {
-    let msg;
-    try { msg = JSON.parse(raw); } catch { return; }
-
+function handleMessage(ws, msg) {
     if (msg.type === "register") {
       if (ws.replaced) return;
       const name = String(msg.name || msg.userId || "").trim().replace(/\s+/g, " ").slice(0, 30);
-      if (name.length < 2) return ws.send(JSON.stringify({ type: "register-error", reason: "Name too short" }));
+      if (name.length < 2) { ws.send(JSON.stringify({ type: "register-error", reason: "Name too short" })); return; }
       const id = name.toLowerCase();
       // Porchbook joins with its account id as the handle and sends the
       // member's real name as a label to show on other screens.
@@ -137,15 +136,118 @@ wss.on("connection", (ws, req) => {
       return;
     }
     target.send(JSON.stringify({ ...msg, from: ws.userId, fromName: ws.displayName }));
+}
+
+function dropClient(ws) {
+  if (ws.userId) console.log(`[line] ${ws.userId.slice(0, 6)}… left (${ws.replaced ? "replaced" : "closed"}): ${ws.about}`);
+  if (ws.userId && users.get(ws.userId) === ws) {
+    users.delete(ws.userId);
+    broadcastPresence();
+  }
+}
+
+// ---- Relay mode -----------------------------------------------------------
+// Some mobile networks (e.g. MTN data) block the always-open connection.
+// Those phones talk to porchbook.vercel.app, which forwards here over plain
+// HTTP: each phone gets a mailbox that it empties every second or two.
+const relays = new Map(); // session -> relay client
+const RELAY_IDLE_MS = 20000;
+
+function makeRelayClient(about) {
+  const session = require("crypto").randomBytes(18).toString("base64url");
+  const client = {
+    session,
+    about: `${about} | relay`,
+    queue: [],
+    lastSeen: Date.now(),
+    OPEN: 1,
+    readyState: 1,
+    send(text) {
+      if (this.queue.length < 500) this.queue.push(text);
+    },
+    close() {
+      if (this.readyState === 3) return;
+      this.readyState = 3;
+      // A replaced phone keeps its mailbox briefly so it can collect the
+      // "replaced" note and step aside instead of fighting back.
+      if (!this.replaced) relays.delete(this.session);
+      dropClient(this);
+    },
+  };
+  relays.set(session, client);
+  return client;
+}
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    let data = "";
+    req.on("data", (chunk) => {
+      data += chunk;
+      if (data.length > 256 * 1024) req.destroy();
+    });
+    req.on("end", () => {
+      try { resolve(JSON.parse(data || "{}")); } catch { resolve({}); }
+    });
+    req.on("error", () => resolve({}));
+  });
+}
+
+async function handleRelay(req, res) {
+  const key = process.env.RELAY_KEY;
+  if (key && req.headers["x-relay-key"] !== key) {
+    res.writeHead(403, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ error: "forbidden" }));
+  }
+  const body = await readBody(req);
+  const reply = (obj) => {
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(obj));
+  };
+  if (body.op === "register") {
+    const client = makeRelayClient(String(body.about || "relay").slice(0, 160));
+    handleMessage(client, { type: "register", name: body.name, label: body.label });
+    const messages = client.queue.splice(0);
+    return reply({ session: client.session, messages });
+  }
+  const client = relays.get(String(body.session || ""));
+  if (!client) return reply({ gone: true });
+  if (client.readyState === 3) {
+    relays.delete(client.session);
+    return reply({ messages: client.queue.splice(0), gone: true });
+  }
+  client.lastSeen = Date.now();
+  if (body.op === "send" && body.message && typeof body.message === "object") {
+    const list = Array.isArray(body.message) ? body.message : [body.message];
+    for (const m of list.slice(0, 50)) if (m && typeof m === "object") handleMessage(client, m);
+  }
+  if (body.op === "leave") {
+    client.close();
+    return reply({ ok: true });
+  }
+  return reply({ messages: client.queue.splice(0) });
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const client of relays.values()) {
+    if (now - client.lastSeen <= RELAY_IDLE_MS) continue;
+    client.close();
+    relays.delete(client.session);
+  }
+}, 5000);
+
+wss.on("connection", (ws, req) => {
+  ws.isAlive = true;
+  ws.about = describe(req);
+  ws.on("pong", () => (ws.isAlive = true));
+
+  ws.on("message", (raw) => {
+    let msg;
+    try { msg = JSON.parse(raw); } catch { return; }
+    handleMessage(ws, msg);
   });
 
-  ws.on("close", () => {
-    if (ws.userId) console.log(`[line] ${ws.userId.slice(0, 6)}… left (${ws.replaced ? "replaced" : "closed"}): ${ws.about}`);
-    if (ws.userId && users.get(ws.userId) === ws) {
-      users.delete(ws.userId);
-      broadcastPresence();
-    }
-  });
+  ws.on("close", () => dropClient(ws));
 });
 
 setInterval(() => {
