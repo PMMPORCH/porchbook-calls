@@ -7,7 +7,7 @@ services:
     startCommand: npm start
     envVars:
       - key: ALLOWED_ORIGINS
-        value: https://pmmporchbook.grok.me
+        value: https://porchbook.vercel.app,https://pmmporchbook.grok.me
       - key: TURN_URLS
         sync: false
       - key: TURN_USERNAME

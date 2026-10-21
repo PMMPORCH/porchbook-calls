@@ -17,8 +17,9 @@ const path = require("path");
 const { WebSocketServer } = require("ws");
 
 const PORT = process.env.PORT || 8080;
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "https://pmmporchbook.grok.me")
-  .split(",").map((s) => s.trim()).filter(Boolean);
+// porchbook.vercel.app is always allowed: it is the live Porchbook site.
+const ALLOWED_ORIGINS = ["https://porchbook.vercel.app", ...(process.env.ALLOWED_ORIGINS || "https://pmmporchbook.grok.me")
+  .split(",").map((s) => s.trim()).filter(Boolean)];
 
 const ICE_SERVERS = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }];
 if (process.env.TURN_URLS) {
