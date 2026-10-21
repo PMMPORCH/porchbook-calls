@@ -102,6 +102,9 @@ wss.on("connection", (ws, req) => {
       const name = String(msg.name || msg.userId || "").trim().replace(/\s+/g, " ").slice(0, 30);
       if (name.length < 2) return ws.send(JSON.stringify({ type: "register-error", reason: "Name too short" }));
       const id = name.toLowerCase();
+      // Porchbook joins with its account id as the handle and sends the
+      // member's real name as a label to show on other screens.
+      const shown = String(msg.label || "").trim().replace(/\s+/g, " ").slice(0, 60) || name;
       const existing = users.get(id);
       const short = id.slice(0, 6) + "…";
       if (existing && existing !== ws && existing.readyState === existing.OPEN) {
@@ -120,9 +123,9 @@ wss.on("connection", (ws, req) => {
       // login, check the member's login token here instead.
       if (ws.userId && ws.userId !== id) users.delete(ws.userId);
       ws.userId = id;
-      ws.displayName = name;
+      ws.displayName = shown;
       users.set(id, ws);
-      ws.send(JSON.stringify({ type: "registered", userId: id, name, iceServers: ICE_SERVERS }));
+      ws.send(JSON.stringify({ type: "registered", userId: id, name: shown, iceServers: ICE_SERVERS }));
       broadcastPresence();
       return;
     }
