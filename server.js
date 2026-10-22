@@ -40,7 +40,12 @@ const originOk = (origin) =>
   !origin || ALLOWED_ORIGINS.includes("*") || ALLOWED_ORIGINS.includes(origin) ||
   /^https?:\/\/localhost(:\d+)?$/.test(origin) || /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(origin);
 
+const { handleFmProcess } = require("./audio-worker");
+
 const server = http.createServer((req, res) => {
+  if (req.method === "POST" && req.url.startsWith("/fm/process")) {
+    return handleFmProcess(req, res);
+  }
   if (req.method === "POST" && req.url.startsWith("/relay")) {
     handleRelay(req, res).catch(() => {
       if (!res.headersSent) res.writeHead(500);
