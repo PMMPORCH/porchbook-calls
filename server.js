@@ -40,11 +40,15 @@ const originOk = (origin) =>
   !origin || ALLOWED_ORIGINS.includes("*") || ALLOWED_ORIGINS.includes(origin) ||
   /^https?:\/\/localhost(:\d+)?$/.test(origin) || /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(origin);
 
-const { handleFmProcess } = require("./audio-worker");
+const { handleFmProcess, fmStatus } = require("./audio-worker");
 
 const server = http.createServer((req, res) => {
   if (req.method === "POST" && req.url.startsWith("/fm/process")) {
     return handleFmProcess(req, res);
+  }
+  if (req.url.startsWith("/fm/status")) {
+    res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+    return res.end(JSON.stringify(fmStatus()));
   }
   if (req.method === "POST" && req.url.startsWith("/relay")) {
     handleRelay(req, res).catch(() => {

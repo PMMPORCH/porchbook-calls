@@ -18,6 +18,7 @@ const PORCHBOOK = (process.env.PORCHBOOK_URL || "https://porchbook.vercel.app").
 const SPEECH = new Set(["preaching", "news", "reading"]);
 const queue = [];
 let running = false;
+let current = 0; // the track being processed right now
 
 function ffmpegPath() {
   try {
@@ -101,7 +102,9 @@ async function processJob(job) {
     console.log(`[fm] track ${job.trackId} done (${Math.round(durationSec)}s)`);
   } catch (error) {
     console.error(`[fm] track ${job.trackId} failed:`, error.message);
-    await tell({ action: "failed", jobToken: job.jobToken, trackId: job.trackId, error: String(error.message).slice(0, 300) }).catch(() => undefined);
+    await tell({ action: "failed", jobToken: job.jobToken, trackId: job.trackId, error: String(error.message).slice(0, 300) }).catch((e) =>
+      console.error(`[fm] couldn't report the failure of track ${job.trackId}:`, e.message),
+    );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -115,7 +118,12 @@ async function drain() {
   const self = process.env.RENDER_EXTERNAL_URL;
   const awake = self ? setInterval(() => void fetch(self).catch(() => undefined), 4 * 60 * 1000) : null;
   try {
-    while (queue.length) await processJob(queue.shift());
+    while (queue.length) {
+      const job = queue.shift();
+      current = job.trackId;
+      await processJob(job);
+      current = 0;
+    }
   } finally {
     if (awake) clearInterval(awake);
     running = false;
@@ -142,11 +150,17 @@ function handleFmProcess(req, res) {
       res.writeHead(400, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ error: "not a Porchbook job" }));
     }
-    if (!queue.some((q) => q.trackId === job.trackId)) queue.push({ jobToken: job.jobToken, trackId: job.trackId, sourceUrl: job.sourceUrl, kind: String(job.kind || "") });
+    const waiting = queue.find((q) => q.trackId === job.trackId);
+    if (waiting) waiting.jobToken = job.jobToken; // the newest token is the one Porchbook expects
+    else if (current !== job.trackId) queue.push({ jobToken: job.jobToken, trackId: job.trackId, sourceUrl: job.sourceUrl, kind: String(job.kind || "") });
     res.writeHead(202, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ queued: queue.length }));
     void drain();
   });
 }
 
-module.exports = { handleFmProcess };
+function fmStatus() {
+  return { working: current, queued: queue.map((q) => q.trackId), ffmpeg: ffmpegPath() };
+}
+
+module.exports = { handleFmProcess, fmStatus };
