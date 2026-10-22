@@ -110,8 +110,16 @@ async function processJob(job) {
 async function drain() {
   if (running) return;
   running = true;
-  while (queue.length) await processJob(queue.shift());
-  running = false;
+  // Free Render servers sleep after 15 quiet minutes; knock on our own door
+  // while there's work so a long queue isn't cut off.
+  const self = process.env.RENDER_EXTERNAL_URL;
+  const awake = self ? setInterval(() => void fetch(self).catch(() => undefined), 4 * 60 * 1000) : null;
+  try {
+    while (queue.length) await processJob(queue.shift());
+  } finally {
+    if (awake) clearInterval(awake);
+    running = false;
+  }
 }
 
 function handleFmProcess(req, res) {
